@@ -11,9 +11,8 @@ Also, this library has for purpose to serve as a basis for behavioral enhancemen
 and contribute!
 
 # Original library
-The original library for Python 2 can be found [here](https://www.hpi.uni-potsdam
-.de/hirschfeld/trac/Cop/wiki/ContextPy) (Hasso 
-Plattner Institut) and [here](https://www.hpi.uni-potsdam.de/hirschfeld/trac/Cop/wiki/ContextPy) (PyPi).
+The original library for Python 2 can be found [here](https://www.hpi.uni-potsdam.de/hirschfeld/trac/Cop/wiki/ContextPy) (Hasso 
+Plattner Institut) and [here](https://pypi.python.org/pypi/ContextPy/) (PyPi).
 
 # About Context-Oriented Programming
 Originally proposed by Robert Hirschfeld & al. ([see this article](http://www.jot.fm/issues/issue_2008_03/article4/))
