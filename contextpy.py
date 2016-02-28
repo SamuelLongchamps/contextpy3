@@ -29,7 +29,7 @@ import sys
 from threading import local
 
 __all__ = ['Layer']
-__all__ += ['activelayer', 'activelayers', 'inactivelayer', 'inactivelayers']
+__all__ += ['activeLayer', 'activeLayers', 'inactiveLayer', 'inactiveLayers']
 __all__ += ['proceed']
 __all__ += ['before', 'after', 'around', 'base']
 __all__ += ['globalActivateLayer', 'globalDeactivateLayer']
@@ -40,26 +40,44 @@ __version__ = "2.0"
 _baselayers = (None,)
 
 
-class MyTLS(local):
+class _MyTLS(local):
+    """
+    Thread-local storage used for thread-specific layer state conservation
+    """
     def __init__(self):
+        super(_MyTLS, self).__init__()
         self.context = None
         self.activelayers = ()
 
-_tls = MyTLS()
+_tls = _MyTLS()
 
 
 class Layer(object):
+    """
+    Representation of a COP Layer as an object
+    """
     def __init__(self, name=None):
-        self._name = name or hex(id(self))
+        """
+        Constructor for a COP layer
+
+        :param name: (Optional) Name of the layer
+        """
+        self.__name = name
+
+    def getIdentifier(self):
+        """
+        :return: Identifier for this layer
+        """
+        return self.__name or hex(id(self))
 
     def __str__(self):
-        return "<layer %s>" % self._name
+        return "<layer {}>".format(self.getIdentifier())
 
     def __repr__(self):
         args = []
-        if self._name != hex(id(self)):
-            args.append('name="%s"' % self._name)
-        return "layer(%s)" % (", ".join(args))
+        if self.__name is not None:
+            args.append('name="{}"'.format(self.__name))
+        return "layer({})".format(", ".join(args))
 
     # TODO: Check what it is used for
     def getEffectiveLayers(self, activelayers):
@@ -67,6 +85,10 @@ class Layer(object):
 
 
 class _LayerManager(object):
+    """
+    Base manager for COP layers which takes care of entering and exiting states
+    """
+
     def __init__(self, layers):
         self._layers = layers
         self._oldLayers = ()
@@ -83,7 +105,11 @@ class _LayerManager(object):
 
 
 class _LayerActivationManager(_LayerManager):
+    """
+    Specialized manager for COP layers which provides
+    """
     def _getActiveLayers(self):
+        # TODO: Get rid of code duplication
         return [layer for layer in self._oldLayers if layer not in self._layers] + self._layers
 
 
@@ -92,72 +118,72 @@ class _LayerDeactivationManager(_LayerManager):
         return [layer for layer in self._oldLayers if layer not in self._layers]
 
 
-def activelayer(layer):
+def activeLayer(layer):
     return _LayerActivationManager([layer])
 
 
-def inactivelayer(layer):
+def inactiveLayer(layer):
     return _LayerDeactivationManager([layer])
 
 
-def activelayers(*layers):
+def activeLayers(*layers):
     return _LayerActivationManager(list(layers))
 
 
-def inactivelayers(*layers):
+def inactiveLayers(*layers):
     return _LayerDeactivationManager(list(layers))
 
 
-class _advice(object):
-    def __init__(self, func, next):
-        if func:
-            self._func = func
-        else:
-            self._func = None
-        self._next = next
+class _Advice(object):
+    def __init__(self, func, nextFct):
+        self._func = func or None
+        self._nextFct = nextFct
 
     def _invoke(self, context, args, kwargs):
-        if (context[0] is None) and (context[1] is None):
-            # Normal Python function no binding needed
-            return self._func(*args, **kwargs)
-        # Kind of instance method, class or static mehtod (binding needed)
-        return self._func.__get__(context[0], context[1])(*args, **kwargs)
+        """
+        Invoke a function using a context object.
+
+        Binding is required only if kind of instance method, class or static method.
+        Otherwise, invoke as normal Python function
+        """
+        return self._func(*args, **kwargs) if context[0] is None and context[1] is None else \
+            self._func.__get__(context[0], context[1])(*args, **kwargs)
 
     def __call__(self, context, args, kwargs):
         raise NotImplementedError
 
     @classmethod
-    def createchain(cls, methods):
+    def createChain(cls, methods):
         if not methods:
-            return _stop(None, None)
+            return _Stop(None, None)
         method, when = methods[0]
-        return when(method, cls.createchain(methods[1:]))
+        return when(method, cls.createChain(methods[1:]))
 
 
-class _before(_advice):
+class _Before(_Advice):
     def __call__(self, context, args, kwargs):
         self._invoke(context, args, kwargs)
-        return self._next(context, args, kwargs)
+        return self._nextFct(context, args, kwargs)
 
 
-class _around(_advice):
+class _Around(_Advice):
     def __call__(self, context, args, kwargs):
         backup = _tls.context
         _tls.context = context
-        context[2] = self._next
+        context[2] = self._nextFct
         result = self._invoke(context, args, kwargs)
         _tls.context = backup
         return result
 
 
-class _after(_advice):
+class _After(_Advice):
     def __call__(self, context, args, kwargs):
-        result = self._next(context, args, kwargs)
-        kwargs_with_result = dict(__result__=result, **kwargs)
-        return self._invoke(context, args, kwargs_with_result)
+        result = self._nextFct(context, args, kwargs)
+        kwargsWithResult = dict(__result__=result, **kwargs)
+        return self._invoke(context, args, kwargsWithResult)
 
 
-class _stop(_advice):
+class _Stop(_Advice):
     def __call__(self, context, args, kwargs):
         raise Exception(
             "called proceed() in innermost function, this probably means that you don't have a base method "
@@ -174,12 +200,12 @@ def _true(activelayers):
 
 
 class _LayeredMethodInvocationProxy(object):
-    __slots__ = ("_inst", "_cls", "_descriptor")
+    __slots__ = ("_descriptor", "_inst", "_cls")
 
     def __init__(self, descriptor, inst, cls):
+        self._descriptor = descriptor
         self._inst = inst
         self._cls = cls
-        self._descriptor = descriptor
 
     def __call__(self, *args, **kwargs):
         activelayers = _baselayers + _tls.activelayers
@@ -198,7 +224,7 @@ class _LayeredMethodInvocationProxy(object):
     def getName(self):
         return self._descriptor.methods[-1][1].__name__
 
-    def registerMethod(self, f, when=_around, layer_=None, guard=_true):
+    def registerMethod(self, f, when=_Around, layer_=None, guard=_true):
         self._descriptor.registerMethod(f, when, layer_, guard)
 
     def unregisterMethod(self, f, layer_=None):
@@ -220,18 +246,18 @@ class _LayeredMethodDescriptor(object):
     def cacheMethods(self, activelayers):
         layers = list(activelayers)
         for layer_ in activelayers:
+            # TODO: Check what this does since getEffectiveLayers just returns the same list
             if layer_ is not None:
                 layers = layer_.getEffectiveLayers(layers)
-        layers = list(reversed(layers))
 
-        # For each active layer, get all methods and the when advice class related to this layer
-        methods = sum([
-                          list(reversed(
-                              [(lmwgm[1], lmwgm[2]) for lmwgm in self._methods if
-                               lmwgm[0] is currentlayer and lmwgm[3](activelayers)]
-                          )) for currentlayer in layers], [])
+        methods = []
+        for currentlayer in activelayers:
+            for lmwgm in self._methods:
+                if lmwgm[0] is currentlayer and lmwgm[3](activelayers):
+                    methods.append((lmwgm[1], lmwgm[2]))
+        methods = list(reversed(methods))  # TODO: Look up why the order is important for the list "methods"
 
-        self._cache[activelayers] = result = _advice.createchain(methods)
+        self._cache[activelayers] = result = _Advice.createChain(methods)
         return result
 
     def setMethods(self, methods):
@@ -241,14 +267,14 @@ class _LayeredMethodDescriptor(object):
     def getMethods(self):
         return list(self._methods)
 
-    def registerMethod(self, f, when=_around, layer_=None, guard=_true, methodName=""):
+    def registerMethod(self, f, when=_Around, layer_=None, guard=_true, methodName=""):
         if methodName == "":
             methodName = f.__name__
         if hasattr(when, "when"):
             when = when.when
 
         assert isinstance(layer_, (Layer, type(None)))
-        assert issubclass(when, _advice)
+        assert issubclass(when, _Advice)
 
         self.methods = self.methods + [
             (layer_, f, when, guard, methodName)]
@@ -275,7 +301,7 @@ class _LayeredMethodDescriptor(object):
 
 def createlayeredmethod(base, partial):
     if base:
-        return _LayeredMethodDescriptor([(None, base, _around, _true)] + partial)
+        return _LayeredMethodDescriptor([(None, base, _Around, _true)] + partial)
     else:
         return _LayeredMethodDescriptor(partial)
 
@@ -296,7 +322,7 @@ def getMethodName(method):
 def __common(layer_, guard, when):
     assert isinstance(layer_, (Layer, type(None))), "layer_ argument must be a layer instance or None"
     assert callable(guard), "guard must be callable"
-    assert issubclass(when, _advice)
+    assert issubclass(when, _Advice)
 
     vars = sys._getframe(2).f_locals
 
@@ -314,15 +340,15 @@ def __common(layer_, guard, when):
 
 
 def before(layer_=None, guard=_true):
-    return __common(layer_, guard, _before)
+    return __common(layer_, guard, _Before)
 
 
 def around(layer_=None, guard=_true):
-    return __common(layer_, guard, _around)
+    return __common(layer_, guard, _Around)
 
 
 def after(layer_=None, guard=_true):
-    return __common(layer_, guard, _after)
+    return __common(layer_, guard, _After)
 
 
 def base(method):
@@ -332,14 +358,14 @@ def base(method):
     currentMethod = vars.get(methodName)
     if issubclass(type(currentMethod), _LayeredMethodDescriptor):
         # add the first entry of the layered method with the base entry
-        currentMethod.methods = [(None, method, _around, _true)] + currentMethod.methods
+        currentMethod.methods = [(None, method, _Around, _true)] + currentMethod.methods
         return currentMethod
     return method
 
 
-before.when = _before
-around.when = _around
-after.when = _after
+before.when = _Before
+around.when = _Around
+after.when = _After
 
 
 def globalActivateLayer(layer):
