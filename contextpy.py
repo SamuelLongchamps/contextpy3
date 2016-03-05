@@ -37,7 +37,7 @@ __all__ += ['globalActivateLayer', 'globalDeactivateLayer']
 __version__ = "2.0"
 
 # tuple with layers that are always active
-_baselayers = (None,)
+_baseLayers = (None,)
 
 
 class _MyTLS(local):
@@ -88,7 +88,6 @@ class _LayerManager(object):
     """
     Base manager for COP layers which takes care of entering and exiting states
     """
-
     def __init__(self, layers):
         self._layers = layers
         self._oldLayers = ()
@@ -106,7 +105,7 @@ class _LayerManager(object):
 
 class _LayerActivationManager(_LayerManager):
     """
-    Specialized manager for COP layers which provides
+    Specialized manager for COP layers which adds layers to the active layers
     """
     def _getActiveLayers(self):
         # TODO: Get rid of code duplication
@@ -114,6 +113,9 @@ class _LayerActivationManager(_LayerManager):
 
 
 class _LayerDeactivationManager(_LayerManager):
+    """
+    Specialized manager for COP layers which removes layers from the active layers
+    """
     def _getActiveLayers(self):
         return [layer for layer in self._oldLayers if layer not in self._layers]
 
@@ -135,6 +137,9 @@ def inactiveLayers(*layers):
 
 
 class _Advice(object):
+    """
+    Type of invokator which can be chained and will automatically order calls depending on the implementation
+    """
     def __init__(self, func, nextFct):
         self._func = func or None
         self._nextFct = nextFct
@@ -208,7 +213,7 @@ class _LayeredMethodInvocationProxy(object):
         self._cls = cls
 
     def __call__(self, *args, **kwargs):
-        activelayers = _baselayers + _tls.activelayers
+        activelayers = _baseLayers + _tls.activelayers
         advice = self._descriptor._cache.get(activelayers) or self._descriptor.cacheMethods(activelayers)
 
         context = [self._inst, self._cls, None]
@@ -268,6 +273,7 @@ class _LayeredMethodDescriptor(object):
         return list(self._methods)
 
     def registerMethod(self, f, when=_Around, layer_=None, guard=_true, methodName=""):
+        # TODO: Lookup why these are useful
         if methodName == "":
             methodName = f.__name__
         if hasattr(when, "when"):
@@ -290,7 +296,7 @@ class _LayeredMethodDescriptor(object):
 
     # Used only for functions (no binding or invocation proxy needed)
     def __call__(self, *args, **kwargs):
-        activelayers = _baselayers + _tls.activelayers
+        activelayers = _baseLayers + _tls.activelayers
         advice = self._cache.get(activelayers) or self.cacheMethods(activelayers)
 
         # 2x None to identify: do not bound this function
@@ -299,11 +305,9 @@ class _LayeredMethodDescriptor(object):
         return result
 
 
-def createlayeredmethod(base, partial):
-    if base:
-        return _LayeredMethodDescriptor([(None, base, _Around, _true)] + partial)
-    else:
-        return _LayeredMethodDescriptor(partial)
+def createlayeredmethod(baseMethod, partial):
+    return _LayeredMethodDescriptor([(None, baseMethod, _Around, _true)] + partial) if baseMethod else \
+           _LayeredMethodDescriptor(partial)
 
 
 # Needed for a hack to get the name of the class/static method object
@@ -312,11 +316,9 @@ class _dummyClass:
 
 
 def getMethodName(method):
-    if type(method) in (classmethod, staticmethod):
-        # Bound the method to a dummy class to retrieve the original name
-        return method.__get__(None, _dummyClass).__name__
-    else:
-        return method.__name__
+    # Bind the method to a dummy class to retrieve the original name for class or static methods
+    return method.__get__(None, _dummyClass).__name__ if type(method) in (classmethod, staticmethod) else \
+           method.__name__
 
 
 def __common(layer_, guard, when):
@@ -358,29 +360,27 @@ def base(method):
     currentMethod = vars.get(methodName)
     if issubclass(type(currentMethod), _LayeredMethodDescriptor):
         # add the first entry of the layered method with the base entry
-        currentMethod.methods = [(None, method, _Around, _true)] + currentMethod.methods
+        currentMethod.methods += [(None, method, _Around, _true)]
         return currentMethod
     return method
 
-
+# TODO: Verify for what purpose this exists
 before.when = _Before
 around.when = _Around
 after.when = _After
 
 
 def globalActivateLayer(layer):
-    global _baselayers
-    if layer in _baselayers:
+    global _baseLayers
+    if layer in _baseLayers:
         raise ValueError("layer is already active")
-    _baselayers += (layer,)
-    return _baselayers
+    _baseLayers += (layer,)
+    return _baseLayers
 
 
 def globalDeactivateLayer(layer):
-    global _baselayers
-    t = list(_baselayers)
-    if layer not in t:
+    global _baseLayers
+    if layer not in _baseLayers:
         raise ValueError("layer is not active")
-    i = t.index(layer)
-    _baselayers = tuple(t[:i] + t[i + 1:])
-    return _baselayers
+    _baseLayers = tuple(l for l in _baseLayers if l is not layer)
+    return _baseLayers
