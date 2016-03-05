@@ -46,5 +46,5 @@ class Person(object):
 
 person = Person("Michael Perscheid", "HPI")
 print(person.getDetails())
-with activelayer(employerLayer):
+with activeLayer(employerLayer):
     print(person.getDetails())
